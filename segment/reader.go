@@ -10,7 +10,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 )
 
 // Reader allows reading logs from a segment file.

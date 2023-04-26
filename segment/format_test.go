@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	fuzz "github.com/google/gofuzz"
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -29,7 +29,6 @@ func TestFileHeaderCodec(t *testing.T) {
 			info: types.SegmentInfo{
 				BaseIndex: 1234,
 				ID:        4321,
-				Codec:     1,
 			},
 		},
 		{
@@ -37,7 +36,6 @@ func TestFileHeaderCodec(t *testing.T) {
 			info: types.SegmentInfo{
 				BaseIndex: 1234,
 				ID:        4321,
-				Codec:     1,
 			},
 			bufSize:      10,
 			wantWriteErr: "short buffer",
@@ -47,7 +45,6 @@ func TestFileHeaderCodec(t *testing.T) {
 			info: types.SegmentInfo{
 				BaseIndex: 1234,
 				ID:        4321,
-				Codec:     1,
 			},
 			corrupt: func(buf []byte) []byte {
 				return buf[0:5]
@@ -59,7 +56,6 @@ func TestFileHeaderCodec(t *testing.T) {
 			info: types.SegmentInfo{
 				BaseIndex: 1234,
 				ID:        4321,
-				Codec:     1,
 			},
 			corrupt: func(buf []byte) []byte {
 				buf[0] = 0xff
@@ -72,7 +68,6 @@ func TestFileHeaderCodec(t *testing.T) {
 			info: types.SegmentInfo{
 				BaseIndex: 1234,
 				ID:        4321,
-				Codec:     1,
 			},
 			corrupt: func(buf []byte) []byte {
 				buf[8] = 0xff
@@ -85,23 +80,9 @@ func TestFileHeaderCodec(t *testing.T) {
 			info: types.SegmentInfo{
 				BaseIndex: 1234,
 				ID:        4321,
-				Codec:     1,
 			},
 			corrupt: func(buf []byte) []byte {
 				buf[16] = 0xff
-				return buf
-			},
-			wantValidateErr: "corrupt",
-		},
-		{
-			name: "bad Codec reading",
-			info: types.SegmentInfo{
-				BaseIndex: 1234,
-				ID:        4321,
-				Codec:     1,
-			},
-			corrupt: func(buf []byte) []byte {
-				buf[24] = 0xff
 				return buf
 			},
 			wantValidateErr: "corrupt",
@@ -111,11 +92,11 @@ func TestFileHeaderCodec(t *testing.T) {
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			len := fileHeaderLen
+			length := fileHeaderLen
 			if tc.bufSize > 0 {
-				len = tc.bufSize
+				length = tc.bufSize
 			}
-			buf := make([]byte, len)
+			buf := make([]byte, length)
 
 			err := writeFileHeader(buf, tc.info)
 
@@ -148,12 +129,12 @@ func TestFileHeaderCodec(t *testing.T) {
 }
 
 func TestFileHeaderCodecFuzz(t *testing.T) {
-	fuzz := fuzz.New()
+	fzz := fuzz.New()
 
 	var info types.SegmentInfo
 	var buf [fileHeaderLen]byte
 	for i := 0; i < 1000; i++ {
-		fuzz.Fuzz(&info)
+		fzz.Fuzz(&info)
 		err := writeFileHeader(buf[:], info)
 		require.NoError(t, err)
 
@@ -169,21 +150,21 @@ func TestFileHeaderCodecFuzz(t *testing.T) {
 }
 
 func TestFrameCodecFuzz(t *testing.T) {
-	fuzz := fuzz.New()
+	fzz := fuzz.New()
 
-	var len uint16
-	// Allocate an extra frameHeaderLen here because some lengths might end up
+	var length uint16
+	// Allocate an extra frameHeaderLen heres because some lengths might end up
 	// needing padding which takes them just over the buffer size.
 	var buf [math.MaxUint16 + frameHeaderLen + frameHeaderLen]byte
 	var val = []byte(strings.Repeat("A Value!", math.MaxUint16/8))
 	var fh frameHeader
 	for i := 0; i < 1000; i++ {
-		fuzz.Fuzz(&len)
+		fzz.Fuzz(&length)
 
 		fh.typ = FrameEntry
-		fh.len = uint32(len)
+		fh.len = uint32(length)
 
-		expectLen := encodedFrameSize(int(len))
+		expectLen := encodedFrameSize(int(length))
 
 		// Note length of val is not the same as fh.len which is what should be
 		// used.
@@ -198,10 +179,10 @@ func TestFrameCodecFuzz(t *testing.T) {
 		}
 
 		// Verify the last padLen bytes are zero
-		for i := padLen(int(len)); i > 0; i-- {
+		for i := padLen(int(length)); i > 0; i-- {
 			require.Equal(t, byte(0), buf[expectLen-i],
 				"expected last %d bytes to be padding. Byte %d of %d isn't zero.",
-				padLen(int(len)), expectLen-i, expectLen)
+				padLen(int(length)), expectLen-i, expectLen)
 		}
 
 		got, err := readFrameHeader(buf[:])
@@ -211,20 +192,20 @@ func TestFrameCodecFuzz(t *testing.T) {
 }
 
 func TestPadLen(t *testing.T) {
-	fuzz := fuzz.New()
-	var len uint32
+	fzz := fuzz.New()
+	var length uint32
 
 	for i := 0; i < 1000; i++ {
-		fuzz.Fuzz(&len)
+		fzz.Fuzz(&length)
 
-		got := padLen(int(len))
+		got := padLen(int(length))
 
-		t.Log("len", len)
+		t.Log("len", length)
 
 		// Test basic properties of padLen
 		require.Less(t, got, frameHeaderLen, "padding must be less than the whole header len")
 		require.GreaterOrEqual(t, got, 0, "padding must be positive")
-		require.Equal(t, 0, (got+int(len))%frameHeaderLen, "padding plus length must be a multiple of header len")
+		require.Equal(t, 0, (got+int(length))%frameHeaderLen, "padding plus length must be a multiple of header len")
 	}
 }
 

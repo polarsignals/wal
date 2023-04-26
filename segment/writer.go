@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 )
 
 // Writer allows appending logs to a segment file as well as reading them back.

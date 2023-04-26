@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 )
 
 const (
@@ -61,7 +61,7 @@ var (
 	+------+------+------+------+------+------+------+------+
 	| SegmentID                                             |
 	+------+------+------+------+------+------+------+------+
-	| Codec                                                 |
+	| Codec (unused)                                        |
 	+------+------+------+------+------+------+------+------+
 
 */
@@ -80,7 +80,10 @@ func writeFileHeader(buf []byte, info types.SegmentInfo) error {
 	buf[7] = version
 	binary.LittleEndian.PutUint64(buf[8:16], info.BaseIndex)
 	binary.LittleEndian.PutUint64(buf[16:24], info.ID)
-	binary.LittleEndian.PutUint64(buf[24:32], info.Codec)
+	// I removed the codec option from this library since we let the caller
+	// define how they want to encode/decode bytes. Keep a placeholder so that
+	// nothing breaks.
+	binary.LittleEndian.PutUint64(buf[24:32], 1)
 	return nil
 }
 
@@ -100,7 +103,6 @@ func readFileHeader(buf []byte) (*types.SegmentInfo, error) {
 	}
 	i.BaseIndex = binary.LittleEndian.Uint64(buf[8:16])
 	i.ID = binary.LittleEndian.Uint64(buf[16:24])
-	i.Codec = binary.LittleEndian.Uint64(buf[24:32])
 	return &i, nil
 }
 
@@ -112,10 +114,6 @@ func validateFileHeader(got, expect types.SegmentInfo) error {
 	if expect.BaseIndex != got.BaseIndex {
 		return fmt.Errorf("%w: segment header BaseIndex %d doesn't match metadata %d",
 			types.ErrCorrupt, got.BaseIndex, expect.BaseIndex)
-	}
-	if expect.Codec != got.Codec {
-		return fmt.Errorf("%w: segment header Codec %d doesn't match metadata %d",
-			types.ErrCorrupt, got.Codec, expect.Codec)
 	}
 
 	return nil

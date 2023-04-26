@@ -4,75 +4,72 @@
 package wal
 
 import (
-	"github.com/hashicorp/raft-wal/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-var (
-	// MetricDefinitions describe the metrics emitted by this library via the
-	// provided metrics.Collector implementation. It's public so that these can be
-	// registered during init with metrics clients that support pre-defining
-	// metrics.
-	MetricDefinitions = metrics.Definitions{
-		Counters: []metrics.Descriptor{
-			{
-				Name: "log_entry_bytes_written",
-				Desc: "log_entry_bytes_written counts the bytes of log entry after encoding" +
-					" with Codec. Actual bytes written to disk might be slightly higher as it" +
-					" includes headers and index entries.",
-			},
-			{
-				Name: "log_entries_written",
-				Desc: "log_entries_written counts the number of entries written.",
-			},
-			{
-				Name: "log_appends",
-				Desc: "log_appends counts the number of calls to StoreLog(s) i.e." +
-					" number of batches of entries appended.",
-			},
-			{
-				Name: "log_entry_bytes_read",
-				Desc: "log_entry_bytes_read counts the bytes of log entry read from" +
-					" segments before decoding. actual bytes read from disk might be higher" +
-					" as it includes headers and index entries and possible secondary reads" +
-					" for large entries that don't fit in buffers.",
-			},
-			{
-				Name: "log_entries_read",
-				Desc: "log_entries_read counts the number of calls to get_log.",
-			},
-			{
-				Name: "segment_rotations",
-				Desc: "segment_rotations counts how many times we move to a new segment file.",
-			},
-			{
-				Name: "head_truncations",
-				Desc: "head_truncations counts how many log entries have been truncated" +
-					" from the head - i.e. the oldest entries. by graphing the rate of" +
-					" change over time you can see individual truncate calls as spikes.",
-			},
-			{
-				Name: "tail_truncations",
-				Desc: "tail_truncations counts how many log entries have been truncated" +
-					" from the head - i.e. the newest entries. by graphing the rate of" +
-					" change over time you can see individual truncate calls as spikes.",
-			},
-			{
-				Name: "stable_gets",
-				Desc: "stable_gets counts how many calls to StableStore.Get or GetUint64.",
-			},
-			{
-				Name: "stable_sets",
-				Desc: "stable_sets counts how many calls to StableStore.Set or SetUint64.",
-			},
-		},
-		Gauges: []metrics.Descriptor{
-			{
-				Name: "last_segment_age_seconds",
-				Desc: "last_segment_age_seconds is a gauge that is set each time we" +
-					" rotate a segment and describes the number of seconds between when" +
-					" that segment file was first created and when it was sealed. this" +
-					" gives a rough estimate how quickly writes are filling the disk.",
-			},
-		},
+type walMetrics struct {
+	bytesWritten          prometheus.Counter
+	entriesWritten        prometheus.Counter
+	appends               prometheus.Counter
+	entryBytesRead        prometheus.Counter
+	entriesRead           prometheus.Counter
+	segmentRotations      prometheus.Counter
+	headTruncations       prometheus.Counter
+	tailTruncations       prometheus.Counter
+	lastSegmentAgeSeconds prometheus.Gauge
+}
+
+func newWALMetrics(reg prometheus.Registerer) *walMetrics {
+	return &walMetrics{
+		bytesWritten: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "entry_bytes_written",
+			Help: "entry_bytes_written counts the bytes of log entry after encoding." +
+				" Actual bytes written to disk might be slightly higher as it" +
+				" includes headers and index entries.",
+		}),
+		entriesWritten: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "entries_written",
+			Help: "entries_written counts the number of entries written.",
+		}),
+		appends: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "appends",
+			Help: "appends counts the number of calls to StoreLog(s) i.e." +
+				" number of batches of entries appended.",
+		}),
+		entryBytesRead: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "entry_bytes_read",
+			Help: "entry_bytes_read counts the bytes of log entry read from" +
+				" segments before decoding. actual bytes read from disk might be higher" +
+				" as it includes headers and index entries and possible secondary reads" +
+				" for large entries that don't fit in buffers.",
+		}),
+		entriesRead: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "entries_read",
+			Help: "entries_read counts the number of calls to get_log.",
+		}),
+		segmentRotations: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "segment_rotations",
+			Help: "segment_rotations counts how many times we move to a new segment file.",
+		}),
+		headTruncations: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "head_truncations",
+			Help: "head_truncations counts how many log entries have been truncated" +
+				" from the head - i.e. the oldest entries. by graphing the rate of" +
+				" change over time you can see individual truncate calls as spikes.",
+		}),
+		tailTruncations: promauto.With(reg).NewCounter(prometheus.CounterOpts{
+			Name: "tail_truncations",
+			Help: "tail_truncations counts how many log entries have been truncated" +
+				" from the tail - i.e. the newest entries. by graphing the rate of" +
+				" change over time you can see individual truncate calls as spikes.",
+		}),
+		lastSegmentAgeSeconds: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
+			Name: "last_segment_age_seconds",
+			Help: "last_segment_age_seconds is a gauge that is set each time we" +
+				" rotate a segment and describes the number of seconds between when" +
+				" that segment file was first created and when it was sealed. this" +
+				" gives a rough estimate how quickly writes are filling the disk.",
+		}),
 	}
-)
+}

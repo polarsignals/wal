@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -515,7 +515,6 @@ func testSegment(baseIndex uint64) types.SegmentInfo {
 		BaseIndex: baseIndex,
 		MinIndex:  baseIndex,
 		ID:        id,
-		Codec:     1,
 		SizeLimit: 4 * 1024, // Small limit to make it easier to test sealing
 		// Other fields don't really matter at segment level for now.
 	}
@@ -559,7 +558,6 @@ func TestDumpSegment(t *testing.T) {
 	err = f.DumpSegment(seg1.BaseIndex, seg1.ID, 0, 0, func(info types.SegmentInfo, e types.LogEntry) (bool, error) {
 		require.Equal(t, seg1.BaseIndex, info.BaseIndex)
 		require.Equal(t, seg1.ID, info.ID)
-		require.Equal(t, seg1.Codec, info.Codec)
 		require.Equal(t, lastDumpedIdx+1, e.Index)
 		require.Equal(t, fmt.Sprintf("%05d. Some Value.", e.Index), string(e.Data))
 		totalDumped++
@@ -572,7 +570,6 @@ func TestDumpSegment(t *testing.T) {
 	err = f.DumpSegment(seg2.BaseIndex, seg2.ID, 0, 0, func(info types.SegmentInfo, e types.LogEntry) (bool, error) {
 		require.Equal(t, seg2.BaseIndex, info.BaseIndex)
 		require.Equal(t, seg2.ID, info.ID)
-		require.Equal(t, seg2.Codec, info.Codec)
 		require.Equal(t, lastDumpedIdx+1, e.Index)
 		require.Equal(t, "tail", string(e.Data))
 		totalDumped++
@@ -677,7 +674,6 @@ func TestDumpLogs(t *testing.T) {
 		expectInfo := expectSegments[segIndex]
 		require.Equal(t, expectInfo.BaseIndex, info.BaseIndex)
 		require.Equal(t, expectInfo.ID, info.ID)
-		require.Equal(t, expectInfo.Codec, info.Codec)
 
 		require.Equal(t, fmt.Sprintf("%05d. Some Value.", e.Index), string(e.Data))
 

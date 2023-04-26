@@ -4,7 +4,6 @@
 package wal
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -17,8 +16,7 @@ import (
 	"time"
 
 	"github.com/benbjohnson/immutable"
-	"github.com/hashicorp/raft"
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,7 +103,6 @@ func makeTestSegment(baseIndex uint64) *testSegment {
 		BaseIndex:  baseIndex,
 		ID:         baseIndex, // for now just use 1:1 baseIndex and ID
 		MinIndex:   baseIndex,
-		Codec:      CodecBinaryV1,
 		CreateTime: time.Now(),
 	}
 
@@ -134,54 +131,30 @@ func stableInt(key string, val uint64) testStorageOpt {
 }
 
 func makeLogEntries(startIdx uint64, num int) []types.LogEntry {
-	codec := &BinaryCodec{}
 	entries := make([]types.LogEntry, 0, num)
-	for _, log := range makeRaftLogs(startIdx, num) {
-		// Allocate a new buffer every time otherwise we end up returning slices to
-		// the same underlying buffer that is mutated in the next iteration.
-		var buf bytes.Buffer
-		if err := codec.Encode(log, &buf); err != nil {
-			panic(err)
+	for i := uint64(0); i < uint64(num); i++ {
+		entry := types.LogEntry{
+			Index: startIdx + i,
+			Data:  []byte(fmt.Sprintf("Log entry %d", startIdx+i)),
 		}
-		// need to copy the buffer since the next iteration may mutate the same
-		// underlying byteslice returned by Bytes
-		entries = append(entries, types.LogEntry{
-			Index: log.Index,
-			Data:  buf.Bytes(),
-		})
+		entries = append(entries, entry)
 	}
 	return entries
 }
 
-func makeRaftLogs(startIdx uint64, num int) []*raft.Log {
-	logs := make([]*raft.Log, 0, num)
-	for i := uint64(0); i < uint64(num); i++ {
-		log := raft.Log{
-			Index:      startIdx + i,
-			Term:       1,
-			Data:       []byte(fmt.Sprintf("Log entry %d", startIdx+i)),
-			AppendedAt: time.Now(),
-		}
-		logs = append(logs, &log)
-	}
-	return logs
-}
-
-func makeRaftLogsSparse(idxs ...uint64) []*raft.Log {
-	logs := make([]*raft.Log, 0, len(idxs))
+func makeLogEntriesSparse(idxs ...uint64) []types.LogEntry {
+	entries := make([]types.LogEntry, 0, len(idxs))
 	for _, idx := range idxs {
-		log := raft.Log{
-			Index:      idx,
-			Term:       1,
-			Data:       []byte(fmt.Sprintf("Log entry %d", idx)),
-			AppendedAt: time.Now(),
+		entry := types.LogEntry{
+			Index: idx,
+			Data:  []byte(fmt.Sprintf("Log entry %d", idx)),
 		}
-		logs = append(logs, &log)
+		entries = append(entries, entry)
 	}
-	return logs
+	return entries
 }
 
-func validateLogEntry(t *testing.T, log *raft.Log) {
+func validateLogEntry(t *testing.T, log types.LogEntry) {
 	expectBytes := []byte(fmt.Sprintf("Log entry %d", log.Index))
 	require.Equal(t, string(expectBytes), string(log.Data))
 }

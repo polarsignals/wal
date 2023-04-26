@@ -10,7 +10,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 )
 
 const (
