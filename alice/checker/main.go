@@ -8,13 +8,13 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/polarsignals/wal/types"
 	"log"
 	"os"
 	"regexp"
 	"strconv"
 
-	"github.com/hashicorp/raft"
-	wal "github.com/hashicorp/raft-wal"
+	"github.com/polarsignals/wal"
 )
 
 func main() {
@@ -194,7 +194,7 @@ func run(dir string, stdoutFile string) error {
 	fmt.Printf("Found first=%d last=%d expected %v\n", first, last, expect)
 
 	var i uint64
-	var l raft.Log
+	var l types.LogEntry
 	for i = first; i <= last; i++ {
 		if i == 0 {
 			// Everything was truncated so nothing to read!

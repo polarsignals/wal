@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 	"go.etcd.io/bbolt"
 )
 
@@ -200,58 +200,6 @@ func (db *BoltMetaDB) CommitState(state types.PersistentState) error {
 	meta := tx.Bucket([]byte(MetaBucket))
 
 	if err := meta.Put([]byte(MetaKey), encoded); err != nil {
-		return err
-	}
-
-	return tx.Commit()
-}
-
-// GetStable returns a value from stable store or nil if it doesn't exist. May
-// be called concurrently by multiple threads.
-func (db *BoltMetaDB) GetStable(key []byte) ([]byte, error) {
-	if db.db == nil {
-		return nil, ErrUnintialized
-	}
-
-	tx, err := db.db.Begin(false)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-	stable := tx.Bucket([]byte(StableBucket))
-
-	val := stable.Get(key)
-	if val == nil {
-		return nil, nil
-	}
-
-	// Need to copy the value since bolt only guarantees the slice is valid until
-	// end of txn.
-	ret := make([]byte, len(val))
-	copy(ret, val)
-	return ret, nil
-}
-
-// SetStable stores a value from stable store. May be called concurrently with
-// GetStable.
-func (db *BoltMetaDB) SetStable(key []byte, value []byte) error {
-	if db.db == nil {
-		return ErrUnintialized
-	}
-
-	tx, err := db.db.Begin(true)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	stable := tx.Bucket([]byte(StableBucket))
-
-	if value == nil {
-		err = stable.Delete(key)
-	} else {
-		err = stable.Put(key, value)
-	}
-	if err != nil {
 		return err
 	}
 

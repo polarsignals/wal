@@ -5,15 +5,14 @@ package main
 
 import (
 	"fmt"
+	"github.com/polarsignals/wal/types"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/coreos/etcd/pkg/fileutil"
-	"github.com/hashicorp/raft"
-	raftboltdb "github.com/hashicorp/raft-boltdb"
-	wal "github.com/hashicorp/raft-wal"
+	"github.com/polarsignals/wal"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,10 +41,6 @@ func BenchmarkAppend(b *testing.B) {
 				defer ls.Close()
 				runAppendBench(b, ls, s, bSize)
 			})
-			b.Run(fmt.Sprintf("entrySize=%s/batchSize=%d/v=Bolt", sizeNames[i], bSize), func(b *testing.B) {
-				ls := openBolt(b)
-				runAppendBench(b, ls, s, bSize)
-			})
 		}
 	}
 }
@@ -61,24 +56,12 @@ func openWAL(b *testing.B) (*wal.WAL, func()) {
 	return ls, func() { os.RemoveAll(tmpDir) }
 }
 
-func openBolt(b *testing.B) *raftboltdb.BoltStore {
-	tmpDir, err := os.MkdirTemp("", "raft-wal-bench-*")
-	require.NoError(b, err)
-	defer os.RemoveAll(tmpDir)
-
-	ls, err := raftboltdb.NewBoltStore(filepath.Join(tmpDir, "bolt-wal.db"))
-	require.NoError(b, err)
-
-	return ls
-}
-
-func runAppendBench(b *testing.B, ls raft.LogStore, s, n int) {
+func runAppendBench(b *testing.B, ls wal.LogStore, s, n int) {
 	// Pre-create batch, we'll just adjust the indexes in the loop
-	batch := make([]*raft.Log, n)
+	batch := make([]types.LogEntry, n)
 	for i := range batch {
-		batch[i] = &raft.Log{
-			Data:       randomData[:s],
-			AppendedAt: time.Now(),
+		batch[i] = types.LogEntry{
+			Data: randomData[:s],
 		}
 	}
 
@@ -108,32 +91,28 @@ func BenchmarkGetLogs(b *testing.B) {
 		"1m",
 	}
 	for i, s := range sizes {
-		wLs, done := openWAL(b)
-		defer done()
-		// close _first_ (defers run in reverse order) before done() which will
-		// delete since rotate could still be happening
-		defer wLs.Close()
-		populateLogs(b, wLs, s, 128) // fixed 128 byte logs
+		func() {
+			wLs, done := openWAL(b)
+			defer done()
+			// close _first_ (defers run in reverse order) before done() which will
+			// delete since rotate could still be happening
+			defer wLs.Close()
+			populateLogs(b, wLs, s, 128) // fixed 128 byte logs
 
-		bLs := openBolt(b)
-		populateLogs(b, bLs, s, 128) // fixed 128 byte logs
-
-		b.Run(fmt.Sprintf("numLogs=%s/v=WAL", sizeNames[i]), func(b *testing.B) {
-			runGetLogBench(b, wLs, s)
-		})
-		b.Run(fmt.Sprintf("numLogs=%s/v=Bolt", sizeNames[i]), func(b *testing.B) {
-			runGetLogBench(b, bLs, s)
-		})
+			b.Run(fmt.Sprintf("numLogs=%s/v=WAL", sizeNames[i]), func(b *testing.B) {
+				runGetLogBench(b, wLs, s)
+			})
+		}()
 	}
 }
 
-func populateLogs(b *testing.B, ls raft.LogStore, n, size int) {
+func populateLogs(b *testing.B, ls wal.LogStore, n, size int) {
 	batchSize := 1000
-	batch := make([]*raft.Log, 0, batchSize)
+	batch := make([]types.LogEntry, 0, batchSize)
 	start := time.Now()
 	for i := 0; i < n; i++ {
-		l := raft.Log{Index: uint64(i + 1), Data: randomData[:2], AppendedAt: time.Now()}
-		batch = append(batch, &l)
+		l := types.LogEntry{Index: uint64(i + 1), Data: randomData[:2]}
+		batch = append(batch, l)
 		if len(batch) == batchSize {
 			err := ls.StoreLogs(batch)
 			require.NoError(b, err)
@@ -147,9 +126,9 @@ func populateLogs(b *testing.B, ls raft.LogStore, n, size int) {
 	b.Logf("populateTime=%s", time.Since(start))
 }
 
-func runGetLogBench(b *testing.B, ls raft.LogStore, n int) {
+func runGetLogBench(b *testing.B, ls wal.LogStore, n int) {
 	b.ResetTimer()
-	var log raft.Log
+	var log types.LogEntry
 	for i := 0; i < b.N; i++ {
 		b.StartTimer()
 		err := ls.GetLog(uint64((i+1)%n), &log)

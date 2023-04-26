@@ -9,25 +9,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/polarsignals/wal/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMetaDB(t *testing.T) {
 	cases := []struct {
-		name        string
-		writeState  *types.PersistentState
-		writeStable map[string][]byte
-		failSim     func()
+		name       string
+		writeState *types.PersistentState
+		failSim    func()
 	}{
 		{
 			name:       "basic storage",
 			writeState: makeState(4),
-			writeStable: map[string][]byte{
-				"CurrentTerm":  []byte{0, 0, 0, 0, 0, 0, 0, 5},
-				"LastVoteTerm": []byte{0, 0, 0, 0, 0, 0, 0, 5},
-				"LastVoteCand": []byte("server1"),
-			},
 		},
 	}
 
@@ -51,9 +45,6 @@ func TestMetaDB(t *testing.T) {
 				if tc.writeState != nil {
 					require.NoError(t, db.CommitState(*tc.writeState))
 				}
-				for k, v := range tc.writeStable {
-					require.NoError(t, db.SetStable([]byte(k), v))
-				}
 
 				// Close DB and re-open a new one to ensure persistence.
 				db.Close()
@@ -64,12 +55,6 @@ func TestMetaDB(t *testing.T) {
 			require.NoError(t, err)
 
 			require.Equal(t, *tc.writeState, gotState)
-
-			for k, v := range tc.writeStable {
-				got, err := db.GetStable([]byte(k))
-				require.NoError(t, err)
-				require.Equal(t, v, got)
-			}
 		})
 	}
 }
@@ -83,12 +68,6 @@ func TestMetaDBErrors(t *testing.T) {
 
 	// Calling anything before load is an error
 	require.ErrorIs(t, db.CommitState(types.PersistentState{NextSegmentID: 1234}), ErrUnintialized)
-
-	_, err = db.GetStable([]byte("foo"))
-	require.ErrorIs(t, err, ErrUnintialized)
-
-	err = db.SetStable([]byte("foo"), []byte("bar"))
-	require.ErrorIs(t, err, ErrUnintialized)
 
 	// Loading twice is OK from same dir
 	_, err = db.Load(tmpDir)
@@ -128,7 +107,6 @@ func makeState(nSegs int) *types.PersistentState {
 			BaseIndex:  uint64(startIdx + (i * perSegment)),
 			MinIndex:   uint64(startIdx + (i * perSegment)),
 			MaxIndex:   uint64(startIdx + ((i + 1) * perSegment) - 1),
-			Codec:      1,
 			IndexStart: 123456,
 			CreateTime: startTime.Add(time.Duration(i) * time.Minute),
 			SealTime:   startTime.Add(time.Duration(i+1) * time.Minute),
@@ -143,7 +121,6 @@ func makeState(nSegs int) *types.PersistentState {
 			ID:         uint64(startID + i),
 			BaseIndex:  uint64(startIdx + (i * perSegment)),
 			MinIndex:   uint64(startIdx + (i * perSegment)),
-			Codec:      1,
 			CreateTime: startTime.Add(time.Duration(i) * time.Minute),
 			SizeLimit:  64 * 1024 * 1024,
 		}

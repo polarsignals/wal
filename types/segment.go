@@ -28,14 +28,6 @@ type SegmentInfo struct {
 	// only set one seal.
 	MaxIndex uint64
 
-	// Codec identifies the codec used to encode log entries. Codec values 0 to
-	// 16k (i.e. the lower 16 bits) are reserved for internal future usage. Custom
-	// codecs must be registered with an identifier higher than this which the
-	// caller is responsible for ensuring uniquely identifies the specific version
-	// of their codec used in any given log. uint64 provides sufficient space that
-	// a randomly generated identifier is almost certainly unique.
-	Codec uint64
-
 	// IndexStart is the file offset where the index can be read from it's 0 for
 	// tail segments and only set after a segment is sealed.
 	IndexStart uint64

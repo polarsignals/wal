@@ -1,3 +1,6 @@
+> **Note**
+> This repository is a fork of github.com/hashicorp/raft-wal. It has been heavily simplified for Polar Signals' use case. The original README has been left intact so might refer to non-existent features.
+ 
 # Raft WAL
 
 This library implements a Write-Ahead Log (WAL) suitable for use with

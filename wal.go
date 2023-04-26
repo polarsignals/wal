@@ -4,10 +4,10 @@
 package wal
 
 import (
-	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/go-kit/log/level"
+	"github.com/prometheus/client_golang/prometheus"
 	"io"
 	"os"
 	"sync"
@@ -15,17 +15,11 @@ import (
 	"time"
 
 	"github.com/benbjohnson/immutable"
-
-	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/raft"
-	"github.com/hashicorp/raft-wal/metrics"
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/go-kit/log"
+	"github.com/polarsignals/wal/types"
 )
 
 var (
-	_ raft.LogStore    = &WAL{}
-	_ raft.StableStore = &WAL{}
-
 	ErrNotFound = types.ErrNotFound
 	ErrCorrupt  = types.ErrCorrupt
 	ErrSealed   = types.ErrSealed
@@ -34,20 +28,44 @@ var (
 	DefaultSegmentSize = 64 * 1024 * 1024
 )
 
-var _ raft.LogStore = &WAL{}
-var _ raft.MonotonicLogStore = &WAL{}
-var _ raft.StableStore = &WAL{}
+// LogStore is used to provide an interface for storing
+// and retrieving logs in a durable fashion.
+type LogStore interface {
+	// FirstIndex returns the first index written. 0 for no entries.
+	FirstIndex() (uint64, error)
+
+	// LastIndex returns the last index written. 0 for no entries.
+	LastIndex() (uint64, error)
+
+	// GetLog gets a log entry at a given index.
+	GetLog(index uint64, log *types.LogEntry) error
+
+	// StoreLogs stores multiple log entries.
+	StoreLogs(logs []types.LogEntry) error
+
+	// TruncateBack truncates the back of the log by removing all entries that
+	// are after the provided `index`. In other words the entry at `index`
+	// becomes the last entry in the log.
+	TruncateBack(index uint64) error
+
+	// TruncateFront truncates the front of the log by removing all entries that
+	// are before the provided `index`. In other words the entry at
+	// `index` becomes the first entry in the log.
+	TruncateFront(index uint64) error
+}
 
 // WAL is a write-ahead log suitable for github.com/hashicorp/raft.
 type WAL struct {
 	closed uint32 // atomically accessed to keep it first in struct for alignment.
 
-	dir         string
-	codec       Codec
-	sf          types.SegmentFiler
-	metaDB      types.MetaStore
-	metrics     metrics.Collector
-	log         hclog.Logger
+	dir    string
+	sf     types.SegmentFiler
+	metaDB types.MetaStore
+
+	reg     prometheus.Registerer
+	metrics *walMetrics
+
+	logger      log.Logger
 	segmentSize int
 
 	// s is the current state of the WAL files. It is an immutable snapshot that
@@ -123,13 +141,6 @@ func Open(dir string, opts ...walOpt) (*WAL, error) {
 	// Build the state
 	recoveredTail := false
 	for i, si := range persisted.Segments {
-
-		// Verify we can decode the entries.
-		// TODO: support multiple decoders to allow rotating codec.
-		if si.Codec != w.codec.ID() {
-			return nil, fmt.Errorf("segment with BasedIndex=%d uses an unknown codec", si.BaseIndex)
-		}
-
 		// We want to keep this segment since it's still in the metaDB list!
 		delete(toDelete, si.ID)
 
@@ -301,8 +312,6 @@ func (w *WAL) newSegment(ID, baseIndex uint64) types.SegmentInfo {
 		MinIndex:  baseIndex,
 		SizeLimit: uint32(w.segmentSize),
 
-		// TODO make these configurable
-		Codec:      CodecBinaryV1,
 		CreateTime: time.Now(),
 	}
 }
@@ -328,36 +337,40 @@ func (w *WAL) LastIndex() (uint64, error) {
 }
 
 // GetLog gets a log entry at a given index.
-func (w *WAL) GetLog(index uint64, log *raft.Log) error {
+func (w *WAL) GetLog(index uint64, log *types.LogEntry) error {
 	if err := w.checkClosed(); err != nil {
 		return err
 	}
 	s, release := w.acquireState()
 	defer release()
-	w.metrics.IncrementCounter("log_entries_read", 1)
+	w.metrics.entriesRead.Inc()
 
 	raw, err := s.getLog(index)
 	if err != nil {
 		return err
 	}
-	w.metrics.IncrementCounter("log_entry_bytes_read", uint64(len(raw.Bs)))
+	w.metrics.entryBytesRead.Add(float64(len(raw.Bs)))
 	defer raw.Close()
 
-	// Decode the log
-	return w.codec.Decode(raw.Bs, log)
-}
+	if cap(log.Data) < len(raw.Bs) {
+		log.Data = make([]byte, len(raw.Bs))
+	} else {
+		log.Data = log.Data[:len(raw.Bs)]
+	}
+	// The previous implementation encoded the index into the record, but in our
+	// case I don't think it's necessary, so set the index virtually here.
+	log.Index = index
 
-// StoreLog stores a log entry.
-func (w *WAL) StoreLog(log *raft.Log) error {
-	return w.StoreLogs([]*raft.Log{log})
+	copy(log.Data, raw.Bs)
+	return nil
 }
 
 // StoreLogs stores multiple log entries.
-func (w *WAL) StoreLogs(logs []*raft.Log) error {
+func (w *WAL) StoreLogs(encoded []types.LogEntry) error {
 	if err := w.checkClosed(); err != nil {
 		return err
 	}
-	if len(logs) < 1 {
+	if len(encoded) < 1 {
 		return nil
 	}
 
@@ -399,8 +412,8 @@ func (w *WAL) StoreLogs(logs []*raft.Log) error {
 	// initialize to the old MaxIndex + 1 after a truncate since that is what our
 	// raft library will use after a restore currently so will avoid this case on
 	// the next append, while still being generally safe.
-	if lastIdx == 0 && logs[0].Index != ti.BaseIndex {
-		if err := w.resetEmptyFirstSegmentBaseIndex(logs[0].Index); err != nil {
+	if lastIdx == 0 && encoded[0].Index != ti.BaseIndex {
+		if err := w.resetEmptyFirstSegmentBaseIndex(encoded[0].Index); err != nil {
 			return err
 		}
 
@@ -414,29 +427,19 @@ func (w *WAL) StoreLogs(logs []*raft.Log) error {
 
 	// Encode logs
 	nBytes := uint64(0)
-	encoded := make([]types.LogEntry, len(logs))
-	for i, l := range logs {
+	for i, l := range encoded {
 		if lastIdx > 0 && l.Index != (lastIdx+1) {
-			return fmt.Errorf("non-monotonic log entries: tried to append index %d after %d", logs[0].Index, lastIdx)
+			return fmt.Errorf("non-monotonic log entries: tried to append index %d after %d", l.Index, lastIdx)
 		}
-		// Need a new buffer each time because Data is just a slice so if we re-use
-		// buffer then all end up pointing to the same underlying data which
-		// contains only the final log value!
-		var buf bytes.Buffer
-		if err := w.codec.Encode(l, &buf); err != nil {
-			return err
-		}
-		encoded[i].Data = buf.Bytes()
-		encoded[i].Index = l.Index
 		lastIdx = l.Index
 		nBytes += uint64(len(encoded[i].Data))
 	}
 	if err := s.tail.Append(encoded); err != nil {
 		return err
 	}
-	w.metrics.IncrementCounter("log_appends", 1)
-	w.metrics.IncrementCounter("log_entries_written", uint64(len(encoded)))
-	w.metrics.IncrementCounter("log_entry_bytes_written", nBytes)
+	w.metrics.appends.Inc()
+	w.metrics.entriesWritten.Add(float64(len(encoded)))
+	w.metrics.bytesWritten.Add(float64(nBytes))
 
 	// Check if we need to roll logs
 	sealed, indexStart, err := s.tail.Sealed()
@@ -450,109 +453,50 @@ func (w *WAL) StoreLogs(logs []*raft.Log) error {
 	return nil
 }
 
-// DeleteRange deletes a range of log entries. The range is inclusive.
-// Implements raft.LogStore. Note that we only support deleting ranges that are
-// a suffix or prefix of the log.
-func (w *WAL) DeleteRange(min uint64, max uint64) error {
+func (w *WAL) TruncateFront(index uint64) error {
 	if err := w.checkClosed(); err != nil {
 		return err
 	}
-	if min > max {
-		// Empty inclusive range.
-		return nil
-	}
-
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
 
 	s, release := w.acquireState()
 	defer release()
 
-	// Work out what type of truncation this is.
 	first, last := s.firstIndex(), s.lastIndex()
-	switch {
-	// |min----max|
-	//               |first====last|
-	// or
-	//                |min----max|
-	// |first====last|
-	case max < first || min > last:
-		// None of the range exists at all so a no-op
+	if index < first {
+		// no-op.
 		return nil
-
-	// |min----max|
-	//      |first====last|
-	// or
-	// |min--------------max|
-	//      |first====last|
-	// or
-	//   |min--max|
-	//   |first====last|
-	case min <= first: // max >= first implied by the first case not matching
-		// Note we allow head truncations where max > last which effectively removes
-		// the entire log.
-		return w.truncateHeadLocked(max + 1)
-
-	//    |min----max|
-	// |first====last|
-	// or
-	//  |min--------------max|
-	// |first====last|
-	case max >= last: // min <= last implied by first case not matching
-		return w.truncateTailLocked(min - 1)
-
-	//    |min----max|
-	// |first========last|
-	default:
-		// Everything else is a neither a suffix nor prefix so unsupported.
-		return fmt.Errorf("only suffix or prefix ranges may be deleted from log")
 	}
+	if index > last {
+		// Full truncation.
+		index = last + 1
+	}
+
+	return w.truncateHeadLocked(index)
 }
 
-// Set implements raft.StableStore
-func (w *WAL) Set(key []byte, val []byte) error {
+func (w *WAL) TruncateBack(index uint64) error {
 	if err := w.checkClosed(); err != nil {
 		return err
 	}
-	w.metrics.IncrementCounter("stable_sets", 1)
-	return w.metaDB.SetStable(key, val)
-}
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
 
-// Get implements raft.StableStore
-func (w *WAL) Get(key []byte) ([]byte, error) {
-	if err := w.checkClosed(); err != nil {
-		return nil, err
-	}
-	w.metrics.IncrementCounter("stable_gets", 1)
-	return w.metaDB.GetStable(key)
-}
+	s, release := w.acquireState()
+	defer release()
 
-// SetUint64 implements raft.StableStore. We assume the same key space as Set
-// and Get so the caller is responsible for ensuring they don't call both Set
-// and SetUint64 for the same key.
-func (w *WAL) SetUint64(key []byte, val uint64) error {
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], val)
-	return w.Set(key, buf[:])
-}
+	first, last := s.firstIndex(), s.lastIndex()
+	if index > last {
+		// no-op.
+		return nil
+	}
+	if index < first {
+		// Full truncation.
+		index = first - 1
+	}
 
-// GetUint64 implements raft.StableStore. We assume the same key space as Set
-// and Get. We assume that the key was previously set with `SetUint64` and
-// returns an undefined value (possibly with nil error) if not.
-func (w *WAL) GetUint64(key []byte) (uint64, error) {
-	raw, err := w.Get(key)
-	if err != nil {
-		return 0, err
-	}
-	if len(raw) == 0 {
-		// Not set, return zero per interface contract
-		return 0, nil
-	}
-	// At least a tiny bit of checking is possible
-	if len(raw) != 8 {
-		return 0, fmt.Errorf("GetUint64 called on a non-uint64 key")
-	}
-	return binary.LittleEndian.Uint64(raw), nil
+	return w.truncateTailLocked(index)
 }
 
 func (w *WAL) triggerRotateLocked(indexStart uint64) {
@@ -584,7 +528,7 @@ func (w *WAL) runRotate() {
 		if err != nil {
 			// The only possible errors indicate bugs and could probably validly be
 			// panics, but be conservative and just attempt to log them instead!
-			w.log.Error("rotate error", "err", err)
+			level.Error(w.logger).Log("msg", "rotate error", "err", err)
 		}
 		done := w.awaitRotate
 		w.awaitRotate = nil
@@ -611,7 +555,7 @@ func (w *WAL) rotateSegmentLocked(indexStart uint64) error {
 		tail.SealTime = time.Now()
 		tail.MaxIndex = newState.tail.LastIndex()
 		tail.IndexStart = indexStart
-		w.metrics.SetGauge("last_segment_age_seconds", uint64(tail.SealTime.Sub(tail.CreateTime).Seconds()))
+		w.metrics.lastSegmentAgeSeconds.Set(tail.SealTime.Sub(tail.CreateTime).Seconds())
 
 		// Update the old tail with the seal time etc.
 		newState.segments = newState.segments.Set(tail.BaseIndex, *tail)
@@ -619,7 +563,7 @@ func (w *WAL) rotateSegmentLocked(indexStart uint64) error {
 		post, err := w.createNextSegment(newState)
 		return nil, post, err
 	}
-	w.metrics.IncrementCounter("segment_rotations", 1)
+	w.metrics.segmentRotations.Inc()
 	return w.mutateStateLocked(txn)
 }
 
@@ -773,7 +717,7 @@ func (w *WAL) truncateHeadLocked(newMin uint64) error {
 			}
 			postCommit = pc
 		}
-		w.metrics.IncrementCounter("head_truncations", nTruncated)
+		w.metrics.headTruncations.Add(float64(nTruncated))
 
 		// Return a finalizer that will be called when all readers are done with the
 		// segments in the current state to close and delete old segments.
@@ -839,7 +783,7 @@ func (w *WAL) truncateTailLocked(newMax uint64) error {
 		if err != nil {
 			return nil, nil, err
 		}
-		w.metrics.IncrementCounter("tail_truncations", nTruncated)
+		w.metrics.tailTruncations.Add(float64(nTruncated))
 
 		// Return a finalizer that will be called when all readers are done with the
 		// segments in the current state to close and delete old segments.
@@ -858,7 +802,7 @@ func (w *WAL) deleteSegments(toDelete map[uint64]uint64) {
 		if err := w.sf.Delete(baseIndex, ID); err != nil {
 			// This is not fatal. We can continue just old files might need manual
 			// cleanup somehow.
-			w.log.Error("failed to delete old segment", "baseIndex", baseIndex, "id", ID, "err", err)
+			level.Error(w.logger).Log("msg", "failed to delete old segment", "baseIndex", baseIndex, "id", ID, "err", err)
 		}
 	}
 }
@@ -868,7 +812,7 @@ func (w *WAL) closeSegments(toClose []io.Closer) {
 		if c != nil {
 			if err := c.Close(); err != nil {
 				// Shouldn't happen!
-				w.log.Error("error closing old segment file", "err", err)
+				level.Error(w.logger).Log("msg", "error closing old segment file", "err", err)
 			}
 		}
 	}
@@ -928,10 +872,4 @@ func (w *WAL) Close() error {
 		})
 	}
 	return nil
-}
-
-// IsMonotonic implements raft.MonotonicLogStore and informs the raft library
-// that this store will only allow consecutive log indexes with no gaps.
-func (w *WAL) IsMonotonic() bool {
-	return true
 }

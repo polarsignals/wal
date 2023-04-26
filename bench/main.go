@@ -16,7 +16,7 @@ import (
 
 	"github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/benmathews/bench"
-	"github.com/hashicorp/raft-wal/metadb"
+	"github.com/polarsignals/wal/metadb"
 )
 
 type opts struct {
@@ -43,7 +43,6 @@ type opts struct {
 func main() {
 	var o opts
 
-	flag.StringVar(&o.version, "v", "wal", "version to test 'wal' or 'bolt'")
 	flag.StringVar(&o.dir, "dir", "", "dir to write to. If empty will create a tmp dir. If not empty the dir will delete any existing WAL files present!")
 	flag.IntVar(&o.rate, "rate", 10, "append rate target per second")
 	flag.DurationVar(&o.duration, "t", 10*time.Second, "duration of the test")

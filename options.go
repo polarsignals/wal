@@ -4,23 +4,13 @@
 package wal
 
 import (
-	"fmt"
-
-	"github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/raft-wal/fs"
-	"github.com/hashicorp/raft-wal/metadb"
-	"github.com/hashicorp/raft-wal/metrics"
-	"github.com/hashicorp/raft-wal/segment"
-	"github.com/hashicorp/raft-wal/types"
+	"github.com/go-kit/log"
+	"github.com/polarsignals/wal/fs"
+	"github.com/polarsignals/wal/metadb"
+	"github.com/polarsignals/wal/segment"
+	"github.com/polarsignals/wal/types"
+	"github.com/prometheus/client_golang/prometheus"
 )
-
-// WithCodec is an option that allows a custom Codec to be provided to the WAL.
-// If not used the default Codec is used.
-func WithCodec(c Codec) walOpt {
-	return func(w *WAL) {
-		w.codec = c
-	}
-}
 
 // WithMetaStore is an option that allows a custom MetaStore to be provided to
 // the WAL. If not used the default MetaStore is used.
@@ -40,9 +30,9 @@ func WithSegmentFiler(sf types.SegmentFiler) walOpt {
 }
 
 // WithLogger is an option that allows a custom logger to be used.
-func WithLogger(logger hclog.Logger) walOpt {
+func WithLogger(logger log.Logger) walOpt {
 	return func(w *WAL) {
-		w.log = logger
+		w.logger = logger
 	}
 }
 
@@ -53,25 +43,18 @@ func WithSegmentSize(size int) walOpt {
 	}
 }
 
-// WithMetricsCollector is an option that allows a custom segmentSize to be set.
-func WithMetricsCollector(c metrics.Collector) walOpt {
+// WithMetricsRegisterer is an option that allows specifying a custom prometheus
+// metrics registerer.
+func WithMetricsRegisterer(reg prometheus.Registerer) walOpt {
 	return func(w *WAL) {
-		w.metrics = c
+		w.reg = reg
 	}
 }
 
 func (w *WAL) applyDefaultsAndValidate() error {
-	// Check if an external codec has been used that it's not using a reserved ID.
-	if w.codec != nil && w.codec.ID() < FirstExternalCodecID {
-		return fmt.Errorf("codec is using a reserved ID (below %d)", FirstExternalCodecID)
-	}
-
 	// Defaults
-	if w.log == nil {
-		w.log = hclog.Default().Named("wal")
-	}
-	if w.codec == nil {
-		w.codec = &BinaryCodec{}
+	if w.logger == nil {
+		w.logger = log.NewNopLogger()
 	}
 	if w.sf == nil {
 		// These are not actually swappable via options right now but we override
@@ -79,8 +62,11 @@ func (w *WAL) applyDefaultsAndValidate() error {
 		vfs := fs.New()
 		w.sf = segment.NewFiler(w.dir, vfs)
 	}
+	if w.reg == nil {
+		w.reg = prometheus.NewRegistry()
+	}
 	if w.metrics == nil {
-		w.metrics = &metrics.NoOpCollector{}
+		w.metrics = newWALMetrics(w.reg)
 	}
 	if w.metaDB == nil {
 		w.metaDB = &metadb.BoltMetaDB{}

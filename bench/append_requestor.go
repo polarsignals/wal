@@ -7,18 +7,15 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"github.com/polarsignals/wal/types"
 	"io"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/benmathews/bench"
 	histwriter "github.com/benmathews/hdrhistogram-writer"
-	"github.com/hashicorp/raft"
-	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
-	wal "github.com/hashicorp/raft-wal"
-	"go.etcd.io/bbolt"
+	"github.com/polarsignals/wal"
 )
 
 var (
@@ -45,30 +42,12 @@ func (f *appendRequesterFactory) GetRequester(number uint64) bench.Requester {
 		panic("wal only supports a single writer")
 	}
 
-	var fn func() (raft.LogStore, error)
-	switch f.opts.version {
-	case "wal":
-		fn = func() (raft.LogStore, error) {
-			return wal.Open(f.opts.dir, wal.WithSegmentSize(f.opts.segSize*1024*1024))
-		}
-	case "bolt":
-		fn = func() (raft.LogStore, error) {
-			boltOpts := raftboltdb.Options{
-				Path: filepath.Join(f.opts.dir, "raft.db"),
-				BoltOptions: &bbolt.Options{
-					NoFreelistSync: f.opts.noFreelistSync,
-				},
-			}
-			return raftboltdb.New(boltOpts)
-		}
-	default:
-		panic("unknown LogStore version: " + f.opts.version)
-	}
-
 	return &appendRequester{
-		opts:     f.opts,
-		output:   f.output,
-		newStore: fn,
+		opts:   f.opts,
+		output: f.output,
+		newStore: func() (wal.LogStore, error) {
+			return wal.Open(f.opts.dir, wal.WithSegmentSize(f.opts.segSize*1024*1024))
+		},
 	}
 }
 
@@ -78,10 +57,10 @@ type appendRequester struct {
 
 	opts opts
 
-	batch        []*raft.Log
+	batch        []types.LogEntry
 	index        uint64
-	newStore     func() (raft.LogStore, error)
-	store        raft.LogStore
+	newStore     func() (wal.LogStore, error)
+	store        wal.LogStore
 	truncateStop func()
 	output       io.Writer
 
@@ -98,13 +77,12 @@ func (r *appendRequester) Setup() error {
 
 	// Prebuild the batch of logs. There is no compression so we don't care that
 	// they are all the same data.
-	r.batch = make([]*raft.Log, r.opts.batchSize)
+	r.batch = make([]types.LogEntry, r.opts.batchSize)
 	for i := range r.batch {
-		r.batch[i] = &raft.Log{
+		r.batch[i] = types.LogEntry{
 			// We'll vary the indexes each time but save on setting this up the same
 			// way every time to!
-			Data:       randomData[:r.opts.logSize],
-			AppendedAt: time.Now(),
+			Data: randomData[:r.opts.logSize],
 		}
 	}
 	r.index = 1
@@ -112,10 +90,10 @@ func (r *appendRequester) Setup() error {
 	if r.opts.preLoadN > 0 {
 		// Write lots of big records and then delete them again. We'll use batches
 		// of 1000 1024 byte records for now to speed things up a bit.
-		preBatch := make([]*raft.Log, 0, 1000)
+		preBatch := make([]types.LogEntry, 0, 1000)
 		fmt.Fprintf(r.output, "Preloading up to index %d\n", r.opts.preLoadN)
 		for r.index <= uint64(r.opts.preLoadN) {
-			preBatch = append(preBatch, &raft.Log{Index: r.index, Data: randomData[:1024]})
+			preBatch = append(preBatch, types.LogEntry{Index: r.index, Data: randomData[:1024]})
 			r.index++
 			if len(preBatch) == 1000 {
 				err := r.store.StoreLogs(preBatch)
@@ -134,7 +112,7 @@ func (r *appendRequester) Setup() error {
 
 		// Now truncate back to trailingLogs.
 		fmt.Fprintf(r.output, "Truncating 1 - %d\n", r.index-uint64(r.opts.truncateTrailingLogs))
-		err := r.store.DeleteRange(1, r.index-uint64(r.opts.truncateTrailingLogs))
+		err := r.store.TruncateFront(r.index - uint64(r.opts.truncateTrailingLogs) + 1)
 		if err != nil {
 			return err
 		}
@@ -176,7 +154,7 @@ func (r *appendRequester) runTruncate(ctx context.Context) {
 			}
 			if deleteMax >= first {
 				st := time.Now()
-				err := r.store.DeleteRange(first, deleteMax)
+				err := r.store.TruncateFront(deleteMax + 1)
 				elapsed := time.Since(st)
 				r.truncateTiming.RecordValue(elapsed.Microseconds())
 				if err != nil {

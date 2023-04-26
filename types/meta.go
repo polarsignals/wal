@@ -22,14 +22,6 @@ type MetaStore interface {
 	// called concurrently with Get/SetStable operations.
 	CommitState(PersistentState) error
 
-	// GetStable returns a value from stable store or nil if it doesn't exist. May
-	// be called concurrently by multiple threads.
-	GetStable(key []byte) ([]byte, error)
-
-	// SetStable stores a value from stable store. May be called concurrently with
-	// GetStable.
-	SetStable(key, value []byte) error
-
 	io.Closer
 }
 

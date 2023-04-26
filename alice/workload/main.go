@@ -7,14 +7,12 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
+	"github.com/polarsignals/wal"
+	"github.com/polarsignals/wal/types"
 	"log"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
-
-	"github.com/hashicorp/raft"
-	wal "github.com/hashicorp/raft-wal"
 )
 
 type opts struct {
@@ -101,16 +99,16 @@ func runTruncate(o opts) error {
 	case "head":
 		// Remove the first two segments
 		fmt.Printf("willTruncateBefore=46\n")
-		err = w.DeleteRange(0, 45)
+		err = w.TruncateFront(46)
 		fmt.Printf("truncatedBefore=46\n")
 	case "tail":
 		// Remove the last two segments
 		fmt.Printf("willTruncateAfter=34\n")
-		err = w.DeleteRange(35, 100)
+		err = w.TruncateBack(34)
 		fmt.Printf("truncatedAfter=34\n")
 	case "all":
 		fmt.Printf("willTruncateAfter=0\n")
-		err = w.DeleteRange(0, 100)
+		err = w.TruncateFront(101)
 		fmt.Printf("truncatedAfter=0\n")
 	}
 	if err != nil {
@@ -124,12 +122,11 @@ func runTruncate(o opts) error {
 
 	// Now append another entry to prove we are in a good state and can't loose
 	// following writes in a crash.
-	err = w.StoreLog(&raft.Log{
-		Index:      last + 1,
-		Term:       1,
-		Type:       raft.LogCommand,
-		Data:       []byte("Post Truncate Entry"),
-		AppendedAt: time.Now(),
+	err = w.StoreLogs([]types.LogEntry{
+		{
+			Index: last + 1,
+			Data:  []byte("Post Truncate Entry"),
+		},
 	})
 	if err != nil {
 		return err
@@ -184,7 +181,7 @@ func populate(dir string, segMentSize, logSize, batchSize, num int) error {
 		return err
 	}
 
-	var logs []*raft.Log
+	var logs []types.LogEntry
 
 	if logSize%4 != 0 {
 		return fmt.Errorf("logSize must be a multiple of 4")
@@ -210,12 +207,9 @@ func populate(dir string, segMentSize, logSize, batchSize, num int) error {
 	}
 
 	for i := 1; i <= num; i++ {
-		logs = append(logs, &raft.Log{
-			Index:      uint64(i),
-			Term:       1,
-			Type:       raft.LogCommand,
-			Data:       bytes.Repeat([]byte(fmt.Sprintf("%03d|", i)), numRepeats),
-			AppendedAt: time.Now(),
+		logs = append(logs, types.LogEntry{
+			Index: uint64(i),
+			Data:  bytes.Repeat([]byte(fmt.Sprintf("%03d|", i)), numRepeats),
 		})
 
 		if len(logs) >= batchSize {
