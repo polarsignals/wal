@@ -31,6 +31,8 @@ var (
 // LogStore is used to provide an interface for storing
 // and retrieving logs in a durable fashion.
 type LogStore interface {
+	io.Closer
+
 	// FirstIndex returns the first index written. 0 for no entries.
 	FirstIndex() (uint64, error)
 
