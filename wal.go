@@ -20,10 +20,11 @@ import (
 )
 
 var (
-	ErrNotFound = types.ErrNotFound
-	ErrCorrupt  = types.ErrCorrupt
-	ErrSealed   = types.ErrSealed
-	ErrClosed   = types.ErrClosed
+	ErrNotFound   = types.ErrNotFound
+	ErrCorrupt    = types.ErrCorrupt
+	ErrSealed     = types.ErrSealed
+	ErrClosed     = types.ErrClosed
+	ErrOutOfRange = errors.New("index out of range")
 
 	DefaultSegmentSize = 64 * 1024 * 1024
 )
@@ -471,8 +472,7 @@ func (w *WAL) TruncateFront(index uint64) error {
 		return nil
 	}
 	if index > last {
-		// Full truncation.
-		index = last + 1
+		return fmt.Errorf("truncate front err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
 	}
 
 	return w.truncateHeadLocked(index)
@@ -494,8 +494,7 @@ func (w *WAL) TruncateBack(index uint64) error {
 		return nil
 	}
 	if index < first {
-		// Full truncation.
-		index = first - 1
+		return fmt.Errorf("truncate back err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
 	}
 
 	return w.truncateTailLocked(index)
