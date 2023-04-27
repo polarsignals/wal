@@ -457,47 +457,55 @@ func (w *WAL) StoreLogs(encoded []types.LogEntry) error {
 }
 
 func (w *WAL) TruncateFront(index uint64) error {
-	if err := w.checkClosed(); err != nil {
-		return err
-	}
-	w.writeMu.Lock()
-	defer w.writeMu.Unlock()
+	err := func() error {
+		if err := w.checkClosed(); err != nil {
+			return err
+		}
+		w.writeMu.Lock()
+		defer w.writeMu.Unlock()
 
-	s, release := w.acquireState()
-	defer release()
+		s, release := w.acquireState()
+		defer release()
 
-	first, last := s.firstIndex(), s.lastIndex()
-	if index < first {
-		// no-op.
-		return nil
-	}
-	if index > last {
-		return fmt.Errorf("truncate front err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
-	}
+		first, last := s.firstIndex(), s.lastIndex()
+		if index < first {
+			// no-op.
+			return nil
+		}
+		if index > last {
+			return fmt.Errorf("truncate front err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
+		}
 
-	return w.truncateHeadLocked(index)
+		return w.truncateHeadLocked(index)
+	}()
+	w.metrics.truncations.WithLabelValues("front", fmt.Sprintf("%t", err == nil))
+	return err
 }
 
 func (w *WAL) TruncateBack(index uint64) error {
-	if err := w.checkClosed(); err != nil {
-		return err
-	}
-	w.writeMu.Lock()
-	defer w.writeMu.Unlock()
+	err := func() error {
+		if err := w.checkClosed(); err != nil {
+			return err
+		}
+		w.writeMu.Lock()
+		defer w.writeMu.Unlock()
 
-	s, release := w.acquireState()
-	defer release()
+		s, release := w.acquireState()
+		defer release()
 
-	first, last := s.firstIndex(), s.lastIndex()
-	if index > last {
-		// no-op.
-		return nil
-	}
-	if index < first {
-		return fmt.Errorf("truncate back err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
-	}
+		first, last := s.firstIndex(), s.lastIndex()
+		if index > last {
+			// no-op.
+			return nil
+		}
+		if index < first {
+			return fmt.Errorf("truncate back err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
+		}
 
-	return w.truncateTailLocked(index)
+		return w.truncateTailLocked(index)
+	}()
+	w.metrics.truncations.WithLabelValues("back", fmt.Sprintf("%t", err == nil))
+	return err
 }
 
 func (w *WAL) triggerRotateLocked(indexStart uint64) {
@@ -718,7 +726,7 @@ func (w *WAL) truncateHeadLocked(newMin uint64) error {
 			}
 			postCommit = pc
 		}
-		w.metrics.headTruncations.Add(float64(nTruncated))
+		w.metrics.entriesTruncated.WithLabelValues("front").Add(float64(nTruncated))
 
 		// Return a finalizer that will be called when all readers are done with the
 		// segments in the current state to close and delete old segments.
@@ -784,7 +792,7 @@ func (w *WAL) truncateTailLocked(newMax uint64) error {
 		if err != nil {
 			return nil, nil, err
 		}
-		w.metrics.tailTruncations.Add(float64(nTruncated))
+		w.metrics.entriesTruncated.WithLabelValues("back").Add(float64(nTruncated))
 
 		// Return a finalizer that will be called when all readers are done with the
 		// segments in the current state to close and delete old segments.

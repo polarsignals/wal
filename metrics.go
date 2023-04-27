@@ -15,8 +15,8 @@ type walMetrics struct {
 	entryBytesRead        prometheus.Counter
 	entriesRead           prometheus.Counter
 	segmentRotations      prometheus.Counter
-	headTruncations       prometheus.Counter
-	tailTruncations       prometheus.Counter
+	entriesTruncated      *prometheus.CounterVec
+	truncations           *prometheus.CounterVec
 	lastSegmentAgeSeconds prometheus.Gauge
 }
 
@@ -52,18 +52,22 @@ func newWALMetrics(reg prometheus.Registerer) *walMetrics {
 			Name: "segment_rotations",
 			Help: "segment_rotations counts how many times we move to a new segment file.",
 		}),
-		headTruncations: promauto.With(reg).NewCounter(prometheus.CounterOpts{
-			Name: "head_truncations",
-			Help: "head_truncations counts how many log entries have been truncated" +
-				" from the head - i.e. the oldest entries. by graphing the rate of" +
-				" change over time you can see individual truncate calls as spikes.",
-		}),
-		tailTruncations: promauto.With(reg).NewCounter(prometheus.CounterOpts{
-			Name: "tail_truncations",
-			Help: "tail_truncations counts how many log entries have been truncated" +
-				" from the tail - i.e. the newest entries. by graphing the rate of" +
-				" change over time you can see individual truncate calls as spikes.",
-		}),
+		entriesTruncated: promauto.With(reg).NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "entries_truncated",
+				Help: "entries_truncated counts how many log entries have been truncated" +
+					" from the front or back.",
+			},
+			[]string{"type"},
+		),
+		truncations: promauto.With(reg).NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "truncations",
+				Help: "truncations is the number of truncate calls categorized by whether" +
+					" the call was successful or not.",
+			},
+			[]string{"type", "success"},
+		),
 		lastSegmentAgeSeconds: promauto.With(reg).NewGauge(prometheus.GaugeOpts{
 			Name: "last_segment_age_seconds",
 			Help: "last_segment_age_seconds is a gauge that is set each time we" +
