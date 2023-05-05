@@ -62,7 +62,7 @@ func newWALMetrics(reg prometheus.Registerer) *walMetrics {
 		),
 		truncations: promauto.With(reg).NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "truncations",
+				Name: "truncations_total",
 				Help: "truncations is the number of truncate calls categorized by whether" +
 					" the call was successful or not.",
 			},
