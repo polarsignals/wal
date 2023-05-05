@@ -54,7 +54,7 @@ func newWALMetrics(reg prometheus.Registerer) *walMetrics {
 		}),
 		entriesTruncated: promauto.With(reg).NewCounterVec(
 			prometheus.CounterOpts{
-				Name: "entries_truncated",
+				Name: "entries_truncated_total",
 				Help: "entries_truncated counts how many log entries have been truncated" +
 					" from the front or back.",
 			},
