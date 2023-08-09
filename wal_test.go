@@ -507,10 +507,6 @@ func TestDeleteRange(t *testing.T) {
 			expectLastIndex:        0,
 			expectDeleted:          []uint64{1000, 1100},
 			expectNHeadTruncations: 110,
-			// This error was added after disallowing full truncations of the
-			// WAL. The variables above are ignored but kept in case we change
-			// our minds.
-			expectErr: ErrOutOfRange.Error(),
 		},
 		{
 			name: "non-deleting tail-truncation",
@@ -573,10 +569,6 @@ func TestDeleteRange(t *testing.T) {
 			// removed but since head deletions are simpler we treat it as a head
 			// deletion.
 			expectNHeadTruncations: 210,
-			// This error was added after disallowing full truncations of the
-			// WAL. The variables above are ignored but kept in case we change
-			// our minds.
-			expectErr: ErrOutOfRange.Error(),
 		},
 	}
 
