@@ -467,14 +467,16 @@ func (w *WAL) TruncateFront(index uint64) error {
 		s, release := w.acquireState()
 		defer release()
 
-		first, last := s.firstIndex(), s.lastIndex()
-		if index < first {
+		if index < s.firstIndex() {
 			// no-op.
 			return nil
 		}
-		if index > last {
-			return fmt.Errorf("truncate front err %w: first=%d, last=%d, index=%d", ErrOutOfRange, first, last, index)
-		}
+		// Note that lastIndex is not checked here to allow for a WAL "reset".
+		// e.g. if the last index is currently 5, and a TruncateFront(10) call
+		// comes in, this is a valid truncation, resulting in an empty WAL with
+		// the new firstIndex and lastIndex being 0. On the next call to
+		// StoreLogs, the firstIndex will be set to the index of the first log
+		// (special case with empty WAL).
 
 		return w.truncateHeadLocked(index)
 	}()
