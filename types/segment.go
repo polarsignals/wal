@@ -122,7 +122,7 @@ type SegmentWriter interface {
 type SegmentReader interface {
 	io.Closer
 
-	// GetLog returns the raw log entry bytes associated with idx. If the log
-	// doesn't exist in this segment ErrNotFound must be returned.
-	GetLog(idx uint64) (*PooledBuffer, error)
+	// GetLog writes the raw log entry bytes associated with idx into le.Data.
+	// If the log doesn't exist in this segment ErrNotFound must be returned.
+	GetLog(idx uint64, le *LogEntry) error
 }

@@ -57,28 +57,28 @@ func (s *state) Persistent() types.PersistentState {
 	}
 }
 
-func (s *state) getLog(index uint64) (*types.PooledBuffer, error) {
+func (s *state) getLog(index uint64, le *types.LogEntry) error {
 	// Check the tail writer first
 	if s.tail != nil {
-		raw, err := s.tail.GetLog(index)
+		err := s.tail.GetLog(index, le)
 		if err != nil && err != ErrNotFound {
 			// Return actual errors since they might mask the fact that index really
 			// is in the tail but failed to read for some other reason.
-			return nil, err
+			return err
 		}
 		if err == nil {
 			// No error means we found it and just need to decode.
-			return raw, nil
+			return nil
 		}
 		// Not in the tail segment, fall back to searching previous segments.
 	}
 
 	seg, err := s.findSegmentReader(index)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return seg.GetLog(index)
+	return seg.GetLog(index, le)
 }
 
 // findSegmentReader searches the segment tree for the segment that contains the

@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"sync"
 
 	"github.com/polarsignals/wal/types"
 )
@@ -22,21 +21,16 @@ const (
 // directory. It uses a VFS to abstract actual file system operations for easier
 // testing.
 type Filer struct {
-	dir     string
-	vfs     types.VFS
-	bufPool sync.Pool
+	dir string
+	vfs types.VFS
 }
 
 // NewFiler creates a Filer ready for use.
 func NewFiler(dir string, vfs types.VFS) *Filer {
-	f := &Filer{
+	return &Filer{
 		dir: dir,
 		vfs: vfs,
 	}
-	f.bufPool.New = func() interface{} {
-		return make([]byte, minBufSize)
-	}
-	return f
 }
 
 // FileName returns the formatted file name expected for this segment.
@@ -58,7 +52,7 @@ func (f *Filer) Create(info types.SegmentInfo) (types.SegmentWriter, error) {
 		return nil, err
 	}
 
-	return createFile(info, wf, &f.bufPool)
+	return createFile(info, wf)
 }
 
 // RecoverTail is called on an unsealed segment when re-opening the WAL it will
@@ -74,7 +68,7 @@ func (f *Filer) RecoverTail(info types.SegmentInfo) (types.SegmentWriter, error)
 		return nil, err
 	}
 
-	return recoverFile(info, wf, &f.bufPool)
+	return recoverFile(info, wf)
 }
 
 // Open an already sealed segment for reading. Open may validate the file's
@@ -112,7 +106,7 @@ func (f *Filer) Open(info types.SegmentInfo) (types.SegmentReader, error) {
 		return nil, err
 	}
 
-	return openReader(info, rf, &f.bufPool)
+	return openReader(info, rf)
 }
 
 // List returns the set of segment IDs currently stored. It's used by the WAL

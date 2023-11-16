@@ -56,9 +56,10 @@ func TestSegmentBasics(t *testing.T) {
 
 	// Should be able to read that from tail (can't use "open" yet to read it
 	// separately since it's not a sealed segment).
-	got, err := w.GetLog(1)
+	var got types.LogEntry
+	require.NoError(t, w.GetLog(1, &got))
 	require.NoError(t, err)
-	require.Equal(t, []byte("one"), got.Bs)
+	require.Equal(t, []byte("one"), got.Data)
 
 	// Try to write a log that is not the expected next index (which would be 2)
 	err = w.Append([]types.LogEntry{{Index: 10, Data: []byte("ten")}})
@@ -82,9 +83,9 @@ func TestSegmentBasics(t *testing.T) {
 	// Now we should be able to read those all back sequentially through the
 	// writer, though some are in the tail block and some in complete blocks.
 	for idx := uint64(1); idx < 12; idx++ {
-		got, err := w.GetLog(idx)
+		err := w.GetLog(idx, &got)
 		require.NoError(t, err, "failed reading idx=%d", idx)
-		require.Equal(t, expectVals[idx-1], string(got.Bs), "bad value for idx=%d", idx)
+		require.Equal(t, expectVals[idx-1], string(got.Data), "bad value for idx=%d", idx)
 	}
 
 	// We just wrote enough data to ensure the segment was sealed.
@@ -372,10 +373,11 @@ func TestRecovery(t *testing.T) {
 			t.Log("\n" + testFileFor(t, w).Dump())
 
 			// Read the whole log!
+			var got types.LogEntry
 			for idx := uint64(1); idx <= lastIdx; idx++ {
-				got, err := w.GetLog(idx)
+				err := w.GetLog(idx, &got)
 				require.NoError(t, err, "failed reading idx=%d", idx)
-				require.True(t, strings.HasPrefix(string(got.Bs), fmt.Sprintf("%05d:", idx)), "bad value for idx=%d", idx)
+				require.True(t, strings.HasPrefix(string(got.Data), fmt.Sprintf("%05d:", idx)), "bad value for idx=%d", idx)
 			}
 		})
 	}
@@ -435,7 +437,7 @@ func TestListAndDelete(t *testing.T) {
 	delete(expectFiles, lastSealedID)
 
 	// List should be updated
-	list, err = f.List()
+	_, err = f.List()
 	require.NoError(t, err)
 }
 

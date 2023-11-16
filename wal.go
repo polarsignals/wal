@@ -348,23 +348,11 @@ func (w *WAL) GetLog(index uint64, log *types.LogEntry) error {
 	defer release()
 	w.metrics.entriesRead.Inc()
 
-	raw, err := s.getLog(index)
-	if err != nil {
+	if err := s.getLog(index, log); err != nil {
 		return err
 	}
-	w.metrics.entryBytesRead.Add(float64(len(raw.Bs)))
-	defer raw.Close()
-
-	if cap(log.Data) < len(raw.Bs) {
-		log.Data = make([]byte, len(raw.Bs))
-	} else {
-		log.Data = log.Data[:len(raw.Bs)]
-	}
-	// The previous implementation encoded the index into the record, but in our
-	// case I don't think it's necessary, so set the index virtually here.
 	log.Index = index
-
-	copy(log.Data, raw.Bs)
+	w.metrics.entryBytesRead.Add(float64(len(log.Data)))
 	return nil
 }
 

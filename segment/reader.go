@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/polarsignals/wal/types"
 )
@@ -18,7 +17,7 @@ type Reader struct {
 	info types.SegmentInfo
 	rf   types.ReadableFile
 
-	bufPool *sync.Pool
+	scratchFrameHeader []byte
 
 	// tail optionally providers an interface to the writer state when this is an
 	// unsealed segment so we can fetch from it's in-memory index.
@@ -29,11 +28,10 @@ type tailWriter interface {
 	OffsetForFrame(idx uint64) (uint32, error)
 }
 
-func openReader(info types.SegmentInfo, rf types.ReadableFile, bufPool *sync.Pool) (*Reader, error) {
+func openReader(info types.SegmentInfo, rf types.ReadableFile) (*Reader, error) {
 	r := &Reader{
-		info:    info,
-		rf:      rf,
-		bufPool: bufPool,
+		info: info,
+		rf:   rf,
 	}
 
 	return r, nil
@@ -46,23 +44,24 @@ func (r *Reader) Close() error {
 
 // GetLog returns the raw log entry bytes associated with idx. If the log
 // doesn't exist in this segment types.ErrNotFound must be returned.
-func (r *Reader) GetLog(idx uint64) (*types.PooledBuffer, error) {
+func (r *Reader) GetLog(idx uint64, le *types.LogEntry) error {
 	offset, err := r.findFrameOffset(idx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	_, payload, err := r.readFrame(offset)
-	if err != nil {
-		return nil, err
+	if _, err := r.readFrame(offset, le); err != nil {
+		return err
 	}
-	return payload, err
+	return nil
 }
 
-func (r *Reader) readFrame(offset uint32) (frameHeader, *types.PooledBuffer, error) {
-	buf := r.makeBuffer()
-
-	n, err := r.rf.ReadAt(buf.Bs, int64(offset))
+func (r *Reader) readFrame(offset uint32, le *types.LogEntry) (frameHeader, error) {
+	if cap(r.scratchFrameHeader) < frameHeaderLen {
+		r.scratchFrameHeader = make([]byte, frameHeaderLen)
+	}
+	r.scratchFrameHeader = r.scratchFrameHeader[:frameHeaderLen]
+	n, err := r.rf.ReadAt(r.scratchFrameHeader, int64(offset))
 	if errors.Is(err, io.EOF) && n >= frameHeaderLen {
 		// We might have hit EOF just because our read buffer (at least 64KiB) might
 		// be larger than the space left in the file (say if files are tiny or if we
@@ -74,56 +73,30 @@ func (r *Reader) readFrame(offset uint32) (frameHeader, *types.PooledBuffer, err
 		// Re-slice buf.Bs so it's len() reflect only what we actually managed to
 		// read. Note this doesn't impact the buffer length when it's returned to
 		// the pool which will still return the whole cap.
-		buf.Bs = buf.Bs[:n]
+		le.Data = le.Data[:n]
 	}
 	if err != nil {
-		return frameHeader{}, nil, err
+		return frameHeader{}, err
 	}
-	fh, err := readFrameHeader(buf.Bs)
+	fh, err := readFrameHeader(r.scratchFrameHeader)
 	if err != nil {
-		return fh, nil, err
+		return fh, err
 	}
-
-	if (frameHeaderLen + int(fh.len)) <= len(buf.Bs) {
-		// We already have all we need read, just return it sliced to just include
-		// the payload.
-		buf.Bs = buf.Bs[frameHeaderLen : frameHeaderLen+fh.len]
-		return fh, buf, nil
-	}
-	// Need to read again, with a bigger buffer, return this one
-	buf.Close()
 
 	// Need to read more bytes, validate that len is a sensible number
 	if fh.len > MaxEntrySize {
-		return fh, nil, fmt.Errorf("%w: frame header indicates a record larger than MaxEntrySize (%d bytes)", types.ErrCorrupt, MaxEntrySize)
+		return fh, fmt.Errorf("%w: frame header indicates a record larger than MaxEntrySize (%d bytes)", types.ErrCorrupt, MaxEntrySize)
 	}
 
-	buf = &types.PooledBuffer{
-		Bs: make([]byte, fh.len),
-		// No closer, let outsized buffers be GCed in case they are massive and way
-		// bigger than we need again. Could reconsider this if we find we need to
-		// optimize for frequent > minBufSize reads.
+	if cap(le.Data) < int(fh.len) {
+		le.Data = make([]byte, fh.len)
 	}
-	if _, err := r.rf.ReadAt(buf.Bs, int64(offset+frameHeaderLen)); err != nil {
-		return fh, nil, err
-	}
-	return fh, buf, nil
-}
+	le.Data = le.Data[:fh.len]
 
-func (r *Reader) makeBuffer() *types.PooledBuffer {
-	if r.bufPool == nil {
-		return &types.PooledBuffer{Bs: make([]byte, minBufSize)}
+	if _, err := r.rf.ReadAt(le.Data, int64(offset+frameHeaderLen)); err != nil {
+		return fh, err
 	}
-	buf := r.bufPool.Get().([]byte)
-	return &types.PooledBuffer{
-		Bs: buf,
-		CloseFn: func() {
-			// Note we always return the whole allocated buf regardless of what Bs
-			// ended up being sliced to.
-			r.bufPool.Put(buf)
-		},
-	}
-
+	return fh, nil
 }
 
 func (r *Reader) findFrameOffset(idx uint64) (uint32, error) {
