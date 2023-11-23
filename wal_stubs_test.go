@@ -488,36 +488,23 @@ func (s *testSegment) Close() error {
 	})
 }
 
-func (s *testSegment) GetLog(idx uint64) (*types.PooledBuffer, error) {
+func (s *testSegment) GetLog(idx uint64, le *types.LogEntry) error {
 	state := s.loadState()
 	if state.closed {
-		return nil, errors.New("closed")
+		return errors.New("closed")
 	}
 	if idx < state.info.MinIndex || (state.info.MaxIndex > 0 && idx > state.info.MaxIndex) {
-		return nil, ErrNotFound
+		return ErrNotFound
 	}
 
 	log, ok := state.logs.Get(idx)
 	if !ok {
-		return nil, ErrNotFound
+		return ErrNotFound
 	}
 
-	// We make a pooled buffer with it's own copy of the log which we then
-	// invalidate when it's Closed to make sure that any test code that reads data
-	// from a buffer that was freed fails to read what it expected. This ensures
-	// our logic about returning slices to users that we might re-use is correct.
-	buf := make([]byte, len(log.Data))
-	copy(buf, log.Data)
-	pb := &types.PooledBuffer{
-		Bs: buf,
-		CloseFn: func() {
-			closed := []byte{'c', 'l', 'o', 's', 'e', 'd', ' ', 'b', 'u', 'f', 'f', 'e', 'r', '!'}
-			for i := 0; i < len(buf); i++ {
-				buf[i] = closed[i%len(closed)]
-			}
-		},
-	}
-	return pb, nil
+	le.Data = make([]byte, len(log.Data))
+	copy(le.Data, log.Data)
+	return nil
 }
 
 func (s *testSegment) Append(entries []types.LogEntry) error {

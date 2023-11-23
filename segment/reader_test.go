@@ -118,18 +118,20 @@ func TestReader(t *testing.T) {
 
 			// Make sure we can read every value
 			for idx := tc.firstIndex; idx <= tc.wantLastIndex; idx++ {
-				got, err := r.GetLog(idx)
+				var le types.LogEntry
+				err := r.GetLog(idx, &le)
 				require.NoError(t, err, "error reading idx=%d", idx)
-				require.True(t, strings.HasPrefix(string(got.Bs), fmt.Sprintf("%05d:", idx)), "bad value for idx=%d", idx)
-				require.Len(t, string(got.Bs), wantLength[idx])
+				require.True(t, strings.HasPrefix(string(le.Data), fmt.Sprintf("%05d:", idx)), "bad value for idx=%d", idx)
+				require.Len(t, string(le.Data), wantLength[idx])
 			}
 
 			// And we should _not_ read one either side
+			var le types.LogEntry
 			if tc.firstIndex > 1 {
-				_, err := r.GetLog(tc.firstIndex - 1)
+				err := r.GetLog(tc.firstIndex-1, &le)
 				require.ErrorIs(t, err, types.ErrNotFound)
 			}
-			_, err = r.GetLog(tc.wantLastIndex + 1)
+			err = r.GetLog(tc.wantLastIndex+1, &le)
 			require.ErrorIs(t, err, types.ErrNotFound)
 		})
 	}
