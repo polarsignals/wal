@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"io"
 	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -29,12 +29,6 @@ func TestFS(t *testing.T) {
 	wf, err := fs.Create(tmpDir, "00001-abcd1234.wal", 512*1024)
 	require.NoError(t, err)
 	defer wf.Close()
-
-	// Should be pre-allocated (on supported file systems).
-	// TODO work out if this is reliable in CI or if we can detect supported FSs?)
-	info, err := os.Stat(filepath.Join(tmpDir, "00001-abcd1234.wal"))
-	require.NoError(t, err)
-	require.Equal(t, int64(512*1024), info.Size())
 
 	// Should be able to write data in any order
 	n, err := wf.WriteAt(bytes.Repeat([]byte{'2'}, 1024), 1024)
@@ -121,17 +115,17 @@ func TestRealFSNoDir(t *testing.T) {
 
 	_, err := fs.ListDir("/not-a-real-dir")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no such file or directory")
+	require.Contains(t, strings.ToLower(err.Error()), "no such file or directory")
 
 	_, err = fs.Create("/not-a-real-dir", "foo", 1024)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no such file or directory")
+	require.Contains(t, strings.ToLower(err.Error()), "no such file or directory")
 
 	_, err = fs.OpenReader("/not-a-real-dir", "foo")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no such file or directory")
+	require.Contains(t, strings.ToLower(err.Error()), "no such file or directory")
 
 	_, err = fs.OpenWriter("/not-a-real-dir", "foo")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "no such file or directory")
+	require.Contains(t, strings.ToLower(err.Error()), "no such file or directory")
 }

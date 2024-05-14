@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/coreos/etcd/pkg/fileutil"
 	"github.com/polarsignals/wal/types"
 )
 
@@ -60,7 +59,8 @@ func (fs *FS) Create(dir string, name string, size uint64) (types.WritableFile, 
 		if size > math.MaxInt32 {
 			return nil, fmt.Errorf("maximum file size is %d bytes", math.MaxInt32)
 		}
-		if err := fileutil.Preallocate(f, int64(size), true); err != nil {
+
+		if err := prealloc(f, int64(size), true); err != nil {
 			f.Close()
 			return nil, err
 		}
@@ -112,17 +112,4 @@ func (fs *FS) OpenReader(dir string, name string) (types.ReadableFile, error) {
 // corrupt in arbitrary ways.
 func (fs *FS) OpenWriter(dir string, name string) (types.WritableFile, error) {
 	return os.OpenFile(filepath.Join(dir, name), os.O_RDWR, os.FileMode(0644))
-}
-
-func syncDir(dir string) error {
-	f, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	err = f.Sync()
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
 }
