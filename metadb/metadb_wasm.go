@@ -1,4 +1,4 @@
-//go:build !wasm
+//go:build wasm
 
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
@@ -9,25 +9,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-
-	"go.etcd.io/bbolt"
 
 	"github.com/polarsignals/wal/types"
 )
 
-const (
-	// FileName is the default file name for the bolt db file.
-	FileName = "wal-meta.db"
+// This file is the BoltMetaDB implementation for the wasm build target. It is
+// a mock store not safe to be used in production.
+// TODO(asubiotto): For our use-case, BoltDB is overkill. Eventually we should
+// just move to something simpler but still correct which can also be used when
+// compiled to WASM.
 
-	// *Bucket are the names used for internal bolt buckets
-	MetaBucket   = "wal-meta"
-	StableBucket = "stable"
-
-	// We just need one key for now so use the byte 'm' for meta arbitrarily.
-	MetaKey = "m"
-)
+// FileName is the default file name for the bolt db file.
+const FileName = "wal-meta.db"
 
 var (
 	// ErrUnintialized is returned when any call is made before Load has opened
@@ -35,40 +31,31 @@ var (
 	ErrUnintialized = errors.New("uninitialized")
 )
 
-// BoltMetaDB implements types.MetaStore using BoltDB as a reliable persistent
-// store. See repo README for reasons for this design choice and performance
-// implications.
 type BoltMetaDB struct {
 	dir string
-	db  *bbolt.DB
+	f   *os.File
 }
 
 func (db *BoltMetaDB) ensureOpen(dir string) error {
 	if db.dir != "" && db.dir != dir {
 		return fmt.Errorf("can't load dir %s, already open in dir %s", dir, db.dir)
 	}
-	if db.db != nil {
+	if db.f != nil {
 		return nil
 	}
 
 	fileName := filepath.Join(dir, FileName)
 
 	open := func() error {
-		bb, err := bbolt.Open(fileName, 0644, nil)
+		f, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE, 0644)
 		if err != nil {
 			return fmt.Errorf("failed to open %s: %w", FileName, err)
 		}
-		db.db = bb
 		db.dir = dir
+		db.f = f
 		return nil
 	}
 
-	// BoltDB can get stuck in invalid states if we crash while it's initializing.
-	// We can't distinguish those as safe to just wipe it and start again because
-	// we don't know for sure if it's failing due to bad init or later corruption
-	// (which would loose data if we just wipe and start over). So to ensure
-	// initial creation of the WAL is as crash-safe as possible we will manually
-	// detect we have an atomic init procedure:
 	//  1. Check if file exits already. If yes, skip init and just open it.
 	//  2. Delete any existing DB file with tmp name
 	//  3. Creat a new BoltDB that is empty and has the buckets with a temp name.
@@ -93,51 +80,19 @@ func (db *BoltMetaDB) ensureOpen(dir string) error {
 }
 
 func safeInitBoltDB(dir string) error {
-	tmpFileName := filepath.Join(dir, FileName+".tmp")
-
 	// Delete any old attempts to init that were unsuccessful
-	if err := os.RemoveAll(tmpFileName); err != nil {
-		return err
-	}
-
-	// Open bolt DB at tmp file name
-	bb, err := bbolt.Open(tmpFileName, 0644, nil)
+	f, err := os.Create(filepath.Join(dir, FileName))
 	if err != nil {
 		return err
 	}
-
-	tx, err := bb.Begin(true)
-	defer tx.Rollback()
-
-	if err != nil {
-		return err
-	}
-	_, err = tx.CreateBucket([]byte(MetaBucket))
-	if err != nil {
-		return err
-	}
-	_, err = tx.CreateBucket([]byte(StableBucket))
-	if err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	// Close the file ready to rename into place and re-open. This probably isn't
-	// necessary but it make it easier to reason about this code path being
-	// totally separate from the common case.
-	if err := bb.Close(); err != nil {
-		return err
-	}
-
-	// We created the DB OK. Now rename it to the final name.
-	if err := os.Rename(tmpFileName, filepath.Join(dir, FileName)); err != nil {
+	if err := f.Close(); err != nil {
 		return err
 	}
 
 	// And Fsync that parent dir to make sure the new new file with it's new name
 	// is persisted!
-	dirF, err := os.Open(dir)
+	// TODO(asubiotto): Directory fsyncs are not supported in WASM.
+	/*dirF, err := os.Open(dir)
 	if err != nil {
 		return err
 	}
@@ -146,7 +101,8 @@ func safeInitBoltDB(dir string) error {
 	if err != nil {
 		return err
 	}
-	return closeErr
+	return closeErr*/
+	return nil
 }
 
 // Load loads the existing persisted state. If there is no existing state
@@ -159,17 +115,13 @@ func (db *BoltMetaDB) Load(dir string) (types.PersistentState, error) {
 		return state, err
 	}
 
-	tx, err := db.db.Begin(false)
+	raw, err := io.ReadAll(db.f)
 	if err != nil {
 		return state, err
 	}
-	defer tx.Rollback()
-	meta := tx.Bucket([]byte(MetaBucket))
 
-	// We just need one key for now so use the byte 'm' for meta arbitrarily.
-	raw := meta.Get([]byte(MetaKey))
-	if raw == nil {
-		// This is valid it's an "empty" log that will be initialized by the WAL.
+	if len(raw) == 0 {
+		// Valid state, just an "empty" log.
 		return state, nil
 	}
 
@@ -186,35 +138,36 @@ func (db *BoltMetaDB) Load(dir string) (types.PersistentState, error) {
 // time and it will never be called concurrently with Load however it may be
 // called concurrently with Get/SetStable operations.
 func (db *BoltMetaDB) CommitState(state types.PersistentState) error {
-	if db.db == nil {
+	if db.f == nil {
 		return ErrUnintialized
 	}
 
-	encoded, err := json.Marshal(state)
+	raw, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("failed to encode persisted state: %w", err)
 	}
 
-	tx, err := db.db.Begin(true)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	meta := tx.Bucket([]byte(MetaBucket))
-
-	if err := meta.Put([]byte(MetaKey), encoded); err != nil {
-		return err
+	// This is not really safe, but good enough for testing.
+	if err := db.f.Truncate(0); err != nil {
+		return fmt.Errorf("failed to truncate file: %w", err)
 	}
 
-	return tx.Commit()
+	if _, err := db.f.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek: %w", err)
+	}
+
+	if _, err := db.f.Write(raw); err != nil {
+		return fmt.Errorf("failed to write persisted state: %w", err)
+	}
+	return nil
 }
 
 // Close implements io.Closer
 func (db *BoltMetaDB) Close() error {
-	if db.db == nil {
+	if db.f == nil {
 		return nil
 	}
-	err := db.db.Close()
-	db.db = nil
-	return err
+	closeErr := db.f.Close()
+	db.f = nil
+	return closeErr
 }

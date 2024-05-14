@@ -6,11 +6,13 @@ package metadb
 import (
 	"io/ioutil"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/polarsignals/wal/types"
 	"github.com/stretchr/testify/require"
+
+	"github.com/polarsignals/wal/types"
 )
 
 func TestMetaDB(t *testing.T) {
@@ -86,7 +88,7 @@ func TestMetaDBErrors(t *testing.T) {
 	// Loading from a non-existent dir is an error
 	var db2 BoltMetaDB
 	_, err = db2.Load("fake-dir-that-does-not-exist")
-	require.ErrorContains(t, err, "no such file or directory")
+	require.True(t, strings.Contains(strings.ToLower(err.Error()), "no such file or directory"))
 }
 
 func makeState(nSegs int) *types.PersistentState {
