@@ -6,8 +6,6 @@ package wal
 import (
 	"errors"
 	"fmt"
-	"github.com/go-kit/log/level"
-	"github.com/prometheus/client_golang/prometheus"
 	"io"
 	"os"
 	"sync"
@@ -16,6 +14,8 @@ import (
 
 	"github.com/benbjohnson/immutable"
 	"github.com/go-kit/log"
+	"github.com/go-kit/log/level"
+
 	"github.com/polarsignals/wal/types"
 )
 
@@ -65,8 +65,7 @@ type WAL struct {
 	sf     types.SegmentFiler
 	metaDB types.MetaStore
 
-	reg     prometheus.Registerer
-	metrics *walMetrics
+	metrics *Metrics
 
 	logger      log.Logger
 	segmentSize int
@@ -346,13 +345,13 @@ func (w *WAL) GetLog(index uint64, log *types.LogEntry) error {
 	}
 	s, release := w.acquireState()
 	defer release()
-	w.metrics.entriesRead.Inc()
+	w.metrics.EntriesRead.Inc()
 
 	if err := s.getLog(index, log); err != nil {
 		return err
 	}
 	log.Index = index
-	w.metrics.entryBytesRead.Add(float64(len(log.Data)))
+	w.metrics.EntryBytesRead.Add(float64(len(log.Data)))
 	return nil
 }
 
@@ -428,9 +427,9 @@ func (w *WAL) StoreLogs(encoded []types.LogEntry) error {
 	if err := s.tail.Append(encoded); err != nil {
 		return err
 	}
-	w.metrics.appends.Inc()
-	w.metrics.entriesWritten.Add(float64(len(encoded)))
-	w.metrics.bytesWritten.Add(float64(nBytes))
+	w.metrics.Appends.Inc()
+	w.metrics.EntriesWritten.Add(float64(len(encoded)))
+	w.metrics.BytesWritten.Add(float64(nBytes))
 
 	// Check if we need to roll logs
 	sealed, indexStart, err := s.tail.Sealed()
@@ -468,7 +467,7 @@ func (w *WAL) TruncateFront(index uint64) error {
 
 		return w.truncateHeadLocked(index)
 	}()
-	w.metrics.truncations.WithLabelValues("front", fmt.Sprintf("%t", err == nil))
+	w.metrics.Truncations.WithLabelValues("front", fmt.Sprintf("%t", err == nil))
 	return err
 }
 
@@ -494,7 +493,7 @@ func (w *WAL) TruncateBack(index uint64) error {
 
 		return w.truncateTailLocked(index)
 	}()
-	w.metrics.truncations.WithLabelValues("back", fmt.Sprintf("%t", err == nil))
+	w.metrics.Truncations.WithLabelValues("back", fmt.Sprintf("%t", err == nil))
 	return err
 }
 
@@ -554,7 +553,7 @@ func (w *WAL) rotateSegmentLocked(indexStart uint64) error {
 		tail.SealTime = time.Now()
 		tail.MaxIndex = newState.tail.LastIndex()
 		tail.IndexStart = indexStart
-		w.metrics.lastSegmentAgeSeconds.Set(tail.SealTime.Sub(tail.CreateTime).Seconds())
+		w.metrics.LastSegmentAgeSeconds.Set(tail.SealTime.Sub(tail.CreateTime).Seconds())
 
 		// Update the old tail with the seal time etc.
 		newState.segments = newState.segments.Set(tail.BaseIndex, *tail)
@@ -562,7 +561,7 @@ func (w *WAL) rotateSegmentLocked(indexStart uint64) error {
 		post, err := w.createNextSegment(newState)
 		return nil, post, err
 	}
-	w.metrics.segmentRotations.Inc()
+	w.metrics.SegmentRotations.Inc()
 	return w.mutateStateLocked(txn)
 }
 
@@ -716,7 +715,7 @@ func (w *WAL) truncateHeadLocked(newMin uint64) error {
 			}
 			postCommit = pc
 		}
-		w.metrics.entriesTruncated.WithLabelValues("front").Add(float64(nTruncated))
+		w.metrics.EntriesTruncated.WithLabelValues("front").Add(float64(nTruncated))
 
 		// Return a finalizer that will be called when all readers are done with the
 		// segments in the current state to close and delete old segments.
@@ -782,7 +781,7 @@ func (w *WAL) truncateTailLocked(newMax uint64) error {
 		if err != nil {
 			return nil, nil, err
 		}
-		w.metrics.entriesTruncated.WithLabelValues("back").Add(float64(nTruncated))
+		w.metrics.EntriesTruncated.WithLabelValues("back").Add(float64(nTruncated))
 
 		// Return a finalizer that will be called when all readers are done with the
 		// segments in the current state to close and delete old segments.

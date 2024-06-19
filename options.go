@@ -5,11 +5,12 @@ package wal
 
 import (
 	"github.com/go-kit/log"
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/polarsignals/wal/fs"
 	"github.com/polarsignals/wal/metadb"
 	"github.com/polarsignals/wal/segment"
 	"github.com/polarsignals/wal/types"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 // WithMetaStore is an option that allows a custom MetaStore to be provided to
@@ -43,11 +44,10 @@ func WithSegmentSize(size int) walOpt {
 	}
 }
 
-// WithMetricsRegisterer is an option that allows specifying a custom prometheus
-// metrics registerer.
-func WithMetricsRegisterer(reg prometheus.Registerer) walOpt {
+// WithMetrics is an option that allows specifying a custom metrics object.
+func WithMetrics(m *Metrics) walOpt {
 	return func(w *WAL) {
-		w.reg = reg
+		w.metrics = m
 	}
 }
 
@@ -62,11 +62,8 @@ func (w *WAL) applyDefaultsAndValidate() error {
 		vfs := fs.New()
 		w.sf = segment.NewFiler(w.dir, vfs)
 	}
-	if w.reg == nil {
-		w.reg = prometheus.NewRegistry()
-	}
 	if w.metrics == nil {
-		w.metrics = newWALMetrics(w.reg)
+		w.metrics = newWALMetrics(prometheus.NewRegistry())
 	}
 	if w.metaDB == nil {
 		w.metaDB = &metadb.BoltMetaDB{}
