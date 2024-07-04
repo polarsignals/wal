@@ -1,4 +1,5 @@
-//go:build !wasm
+//go:build !wasm && !windows
+// +build !wasm,!windows
 
 // Copyright (c) HashiCorp, Inc
 // SPDX-License-Identifier: MPL-2.0
